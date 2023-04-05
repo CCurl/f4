@@ -527,12 +527,21 @@ DefCode "EMIT",4,0,EMIT         ; ( ch-- )
         NEXT
 
 ; -------------------------------------------------------------------------------------
+DefCode "COUNT",5,0,COUNT       ; ( c-str--addr len )
+        pop edx
+        movzx ecx, BYTE [edx]
+        inc edx
+        push edx
+        push ecx
+        NEXT
+
+; -------------------------------------------------------------------------------------
 DefCode "TYPE",4,0,TYPE         ; ( addr len-- )
         ioTYPE
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode "TIMER",5,0,TIMER     ; ( --n )
+DefCode "TIMER",5,0,TIMER       ; ( --n )
         ioTIMER
 nxt:    NEXT
 
