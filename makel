@@ -1,0 +1,2 @@
+#/bin/sh
+fasm -d FOR_OS=LINUX f4.asm

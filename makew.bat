@@ -1,0 +1,1 @@
+fasm -d FOR_OS=WINDOWS f4.asm
