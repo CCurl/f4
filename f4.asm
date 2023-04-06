@@ -306,6 +306,37 @@ wdX:    mov [toIn], edx
         ret
 
 ; -------------------------------------------------------------------------------------
+; doCstr: Parse the next word from >IN into curWord as a counted string.
+;       Return: None
+;       NOTE: [curWord]=0 means end of line
+doCStr: mov edi, curWord
+        xor eax, eax
+        mov edx, [toIn]         ; 1st byte => length 0
+        stosb
+cs01:   mov al, [edx]           ; Skip any leading whitespace
+        cmp al, 0               ; EOL?
+        je csX
+        cmp al, 32
+        jg cs02
+        inc edx
+        jmp cs01
+cs02:   stosb                   ; Collect word
+        inc BYTE [curWord]      ; update length
+        inc edx
+        mov al, [edx]           ; Next char
+        cmp al, 32
+        jg cs02
+csX:    mov [toIn], edx
+        mov [edi], BYTE 0       ; Add NULL terminator
+        ret
+
+; -------------------------------------------------------------------------------------
+DefCode "WORDC",5,0,xtWORDC     ; ( --cStr )
+        call doCStr
+        push DWORD curWord
+        NEXT
+
+; -------------------------------------------------------------------------------------
 DefCode "WORD",4,0,xtWORD       ; ( --addr len )
         call doWord
         push DWORD curWord
@@ -373,10 +404,10 @@ DefCode "SWAP",4,0,SWAP
 
 ; -------------------------------------------------------------------------------------
 DefCode "OVER",4,0,OVER
-        pop eax
-        mov ebx, TOS
-        push eax
+        pop ebx
+        mov eax, TOS
         push ebx
+        push eax
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -759,7 +790,7 @@ DefWord "INTERPRET",9,0,INTERPRET
         dd OK
         dd TIB, LIT, 128, ACCEPT, DROP
         dd TIB, TOIN, fSTORE
-in01:   dd xtWORD                               ; ( --str len )
+in01:   dd xtWORDC, COUNT                       ; ( --str len )
         dd DUP1, zBRANCH, inX                   ; dup 0= if drop2 exit then
         dd OVER, OVER, NUMq                     ; ( str len--str len num flg )
         dd zBRANCH, in02                        ; ( str len num f--str len num )
