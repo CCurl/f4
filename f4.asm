@@ -306,7 +306,7 @@ wdX:    mov [toIn], edx
         ret
 
 ; -------------------------------------------------------------------------------------
-; doCstr: Parse the next word from >IN into curWord as a counted string.
+; doCStr: Parse the next word from >IN into curWord as a counted string.
 ;       Return: None
 ;       NOTE: [curWord]=0 means end of line
 doCStr: mov edi, curWord
@@ -760,6 +760,34 @@ DefCode "R>",2,0,RFrom
         rPOP eax
         push eax
         NEXT
+
+; -------------------------------------------------------------------------------------
+; toNum ( u1 addr1 len1 -- u2 addr2 len2 )
+toNum:  pop eax         ; Move addr from 'call' to >R
+        rPUSH eax
+        pop ecx         ; starting len
+        pop edi         ; starting addr
+        pop edx         ; starting num
+
+        push edx        ; ending num
+        push edi        ; ending addr
+        push ecx        ; ending len
+        rPOP eax        ; Put call return addr back
+        push eax
+        ret
+
+; -------------------------------------------------------------------------------------
+DefCode "INTERP",6,0,INTERP
+        call doCStr
+        movzx ecx, BYTE [curWord]
+        jz intX
+        push DWORD 0
+        push curWord
+        inc DWORD TOS
+        call toNum
+        pop ecx         ; len left (=0 if is-number)
+        pop eax
+intX:   NEXT
 
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
