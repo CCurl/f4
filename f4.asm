@@ -153,12 +153,19 @@ DefCode "SP0",3,0,SP0
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode ",",1,0,COMMA
-        pop eax
+; Comma: The standard FORTH ','
+;       Params: EAX => val
+Comma:  push edx
         mov edx, [v_HERE]
         mov [edx], eax
         add edx, CELL_SIZE
         mov [v_HERE], edx
+        pop edx
+        ret
+
+DefCode ",",1,0,COMMA
+        pop eax
+        call Comma
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -233,39 +240,48 @@ eqiYes: mov eax, 1              ; Strings are equal
         ret
 
 ; -------------------------------------------------------------------------------------
-; FIND: Look for a word in the dictionary.
-;       Stack: if found,     ( str len--xt flags 1 )
-;              if not found, ( str len--str len 0 )
-DefCode "FIND",4,0,FIND
-        pop edx                 ; string
-        pop ecx                 ; length
+; doFind: Version of FIND that can be called from assembly
+;       Params: word/len ECX/EDX
+;       Return: If found, EAX=[entry], ECX=Flags, EDX=XT
+;               If not found, EAX=0, EDX and ECX are unchanged
+;               NOTE: EBX is used/destroyed
+doFind:
         mov eax, [v_LAST]       ; EAX: the current dict entry
 fw01:   test eax, eax           ; end of dictionary?
         jz fwNo
-        push edx                ; Save string
-        push ecx                ; Save length
+        push edx                ; Save length
+        push ecx                ; Save string
         push eax                ; Save the current word
         add eax, CELL_SIZE*2+1  ; add length offset
         movzx ebx, BYTE [eax]   ; length2
         inc eax                 ; string2
         call strEqI
         pop ebx                 ; Get current dict entry (was EAX)
-        pop ecx                 ; Get length back
-        pop edx                 ; Get string back
-        test eax, eax           ; Not 0 means they are equal
+        pop ecx                 ; Get string back
+        pop edx                 ; Get length back
+        test eax, eax           ; EAX != 0 means they are equal
         jnz fwYes
         mov eax, [ebx]          ; Not equal, move to the next word
         jmp fw01
-fwNo:   push ecx                ; Not found, return (--name len 0)
-        push edx
-        push 0
-        NEXT
-fwYes:  add ebx, CELL_SIZE      ; Offset to XT
-        push DWORD [ebx]        ; XT
-        add ebx, CELL_SIZE      ; Offset to Flags
-        movzx eax, BYTE [ebx]   ; Flags
-        push eax
-        push 1                  ; FOUND!
+fwNo:   ret
+fwYes:  mov eax, ebx            ; EAX: The entry
+        add ebx, CELL_SIZE
+        mov edx, [ebx]          ; EDX: XT
+        add ebx, CELL_SIZE
+        movzx ecx, BYTE [ebx]   ; ECX: Flags
+        ret
+
+; -------------------------------------------------------------------------------------
+; FIND: Look for a word in the dictionary.
+;       Stack: if found,     ( str len--xt flags 1 )
+;              if not found, ( str len--str len 0 )
+DefCode "FIND",4,0,FIND
+        pop edx                 ; length
+        pop ecx                 ; string
+        call doFind
+        push ecx                ; string | xt
+        push edx                ; length | flags
+        push eax                ; 0 means not found
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -279,7 +295,7 @@ DefCode "EXECUTE",7,0,EXECUTE           ; ( xt-- )
 ;       NOTE: ECX=0 means end of line
 doWord: mov ebx, curWord
         xor ecx, ecx            ; len
-        mov edx, [toIn]
+        mov edx, [curIn]
         xor eax, eax
 wd01:   mov al, [edx]           ; Skip any leading whitespace
         cmp al, 32
@@ -301,37 +317,51 @@ wd02:   mov [ebx], al           ; Collect word
         jl wdX
         cmp ecx, 32
         jl wd02
-wdX:    mov [toIn], edx
+wdX:    mov [curIn], edx
         mov [ebx], BYTE 0       ; Add NULL terminator
         ret
 
 ; -------------------------------------------------------------------------------------
-; doCStr: Parse the next word from >IN into curWord as a counted string.
-;       Return: None
-;       NOTE: [curWord]=0 means end of line
+; doCStr: Parse the next word by delim in  into curWord as a counted string.
+;       Params: BL  => Delimiter (0 means whitespace)
+;       Return: ECX => length of word
+;       NOTE: ECX=0 means end of line
 doCStr: mov edi, curWord
+        mov edx, [curIn]
+        xor ecx, ecx            ; length is 0
         xor eax, eax
-        mov edx, [toIn]         ; 1st byte => length 0
-        stosb
-cs01:   mov al, [edx]           ; Skip any leading whitespace
-        cmp al, 0               ; EOL?
+        stosb                   ; 1st byte => length 0
+        cmp bl, 32              ; Skip WS only if bl == 32
+        jne cs01
+        TRC 'b'
+csSKW:  mov al, [edx]           ; Get the current char
+        test al, al             ; EOL?
+        jz csX
+        cmp al, 32
+        jg cs01
+        inc edx
+        jmp csSKW
+cs01:   mov al, [edx]           ; Get the current char
+        jz csX                  ; EOL?
+        cmp al, bl              ; Hit the delim?
         je csX
-        cmp al, 32
-        jg cs02
-        inc edx
+        cmp bl, 32              ; WS delimiter needs more checking
+        jne csCW
+        cmp al, 33
+        jl csX
+csCW:   mov [edi], al           ; Collect the char into curWord
+        inc edi
+        inc ecx                 ; update length
+        inc edx                 ; Next char
         jmp cs01
-cs02:   stosb                   ; Collect word
-        inc BYTE [curWord]      ; update length
-        inc edx
-        mov al, [edx]           ; Next char
-        cmp al, 32
-        jg cs02
-csX:    mov [toIn], edx
+csX:    mov [curWord], cl
+        mov [curIn], edx
         mov [edi], BYTE 0       ; Add NULL terminator
         ret
 
 ; -------------------------------------------------------------------------------------
 DefCode "WORDC",5,0,xtWORDC     ; ( --cStr )
+        mov bl, 32
         call doCStr
         push DWORD curWord
         NEXT
@@ -616,23 +646,23 @@ DefCode "CREATE",6,0,CREATE
         NEXT
 
 ; -------------------------------------------------------------------------------------
-; digitQ: Set EDX=1 if EAX is a digit in base EBX, else EDX=0.
-;           NOTE: EAX will be the converted digit if EDX=1.
-digitQ: cmp eax, '0'                    ; <'0' means no
+; digitQ: Set AH=0 if AL is a digit in base BL, else AH=1.
+;           NOTE: if AH=0, AL will be the converted digit.
+digitQ: cmp al, '0'                     ; <'0' means no
         jl dqNo
-        sub eax, '0'                    ; Convert to number
-        cmp eax, ebx                    ; 0 .. (base-1) => OK
+        sub al, '0'                     ; Convert to number
+        cmp al, bl                      ; 0 .. (base-1) => OK
         jl dqYes
-        cmp ebx, 10                     ; BASE>10 needs more checking
+        cmp bl, 10                      ; BASE>10 needs more checking
         jle dqNo
-        sub eax, 7                      ; Hex: 'A'-'0'-7 => 10
-        cmp eax, 9
+        sub al, 7                       ; Hex: 'A'-'0'-7 => 10
+        cmp al, 9
         jle dqNo
         cmp eax, ebx
         jge dqNo
-dqYes:  mov edx, 1
+dqYes:  mov ah, 0
         ret
-dqNo:   mov edx, 0
+dqNo:   mov ah, 1
         ret
 
 ; -------------------------------------------------------------------------------------
@@ -762,14 +792,27 @@ DefCode "R>",2,0,RFrom
         NEXT
 
 ; -------------------------------------------------------------------------------------
-; toNum ( u1 addr1 len1 -- u2 addr2 len2 )
+; toNum: Implementation for the Forth CORE word >NUMBER
+;       Stack: ( u1 addr1 len1 -- u2 addr2 len2 )
 toNum:  pop eax         ; Move addr from 'call' to >R
         rPUSH eax
         pop ecx         ; starting len
         pop edi         ; starting addr
         pop edx         ; starting num
-
-        push edx        ; ending num
+        xor eax, eax
+        mov ebx, [v_BASE]
+tn01:   test ecx, ecx
+        jz tnX
+        mov al, [edi]
+        call digitQ
+        test ah, ah     ; AH=1 if not a number
+        jnz tnX
+        imul edx, ebx
+        add edx, eax
+        inc edi
+        dec ecx
+        jmp tn01
+tnX :   push edx        ; ending num
         push edi        ; ending addr
         push ecx        ; ending len
         rPOP eax        ; Put call return addr back
@@ -777,24 +820,97 @@ toNum:  pop eax         ; Move addr from 'call' to >R
         ret
 
 ; -------------------------------------------------------------------------------------
-DefCode "INTERP",6,0,INTERP
-        call doCStr
-        movzx ecx, BYTE [curWord]
-        jz intX
-        push DWORD 0
-        push curWord
-        inc DWORD TOS
+; Try to evaluate curWord as a NUMBER
+;       Return: ECX == 0 means it was a number and has been "handled"
+evNum:  mov edx, curWord
+        movzx ecx, BYTE [edx]
+        inc edx
+        push 0
+        push edx
+        push ecx
         call toNum
-        pop ecx         ; len left (=0 if is-number)
-        pop eax
-intX:   NEXT
+        pop ecx         ; length left (=0 if is-number)
+        pop eax         ; discard char
+        pop edx         ; Number result
+        test ecx, ecx   ; 0 chars left means it was a number
+        jnz evnX
+        mov eax, [v_STATE]
+        cmp eax, 1
+        jne evnX
+        mov eax, LIT
+        call Comma
+        mov eax, edx
+        call Comma
+evnX:   ret
+
+; -------------------------------------------------------------------------------------
+; Try to evaluate curWord as a WORD
+;       Return: EAX != 0 means it was a word and has been "handled"
+evWord: mov ecx, curWord
+        movzx edx, BYTE [ecx]
+        inc ecx
+        call doFind
+        test eax, eax           ; EAX=<the entry> or 0 if not found
+        jz evwX
+        mov ebx, [v_STATE]      ; if STATE == 0 or FLAGS == 1, execute it
+        test ebx, ebx
+        jz evwEX
+        cmp ecx, 1
+        je evwEX
+        mov eax, edx
+        call Comma
+        ret
+evwEX:  pop eax                 ; execute the word. We are not returning.
+        jmp DWORD [edx]
+evwX:   ret
+
+; -------------------------------------------------------------------------------------
+; Print the current word
+pcw:    TRC '['
+        mov edx, curWord
+        movzx ecx, BYTE [edx]
+        inc edx
+        push edx
+        push ecx
+        ioTYPE
+        TRC ']'
+        ret
+
+; -------------------------------------------------------------------------------------
+; everr: Print an error and restart
+evErr:
+        call pcw
+        TRC '?'
+        TRC '?'
+        ret
+
+; -------------------------------------------------------------------------------------
+DefCode "EVAL",4,0,EVAL
+        mov [curIn], tib
+evLOOP: mov bl, 32
+        call doCStr             ; Get the next word
+        ; call pcw
+        test ecx, ecx           ; Is the word empty?
+        jz evX
+        call pcw
+        call evNum              ; Try to evaluate it as a number
+        test ecx, ecx           ; ECX == 0 Means "handled"
+        jz evLOOP
+        call evWord             ; Try to evaluate it as a word
+        test eax, eax           ; EAX != 0 Means "handled"
+        jnz evLOOP
+        call evErr              ; Error evaluation
+        mov esi, coldStart
+evX:    NEXT
 
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 DefWord "QUIT",4,0,QUIT
         dd zRSP
-quitL:  dd INTERPRET, BRANCH, quitL
+qLOOP:  dd OK, TIB, LIT, 128, ACCEPT, DROP
+        dd EVAL, BRANCH, qLOOP
+; quitL:  dd INTERPRET, BRANCH, quitL
 
 ; -------------------------------------------------------------------------------------
 DefWord "CR",2,0,CR
@@ -851,7 +967,7 @@ DefWord "TIB",3,0,TIB
 
 ; -------------------------------------------------------------------------------------
 DefWord ">IN",3,0,TOIN
-        dd LIT, toIn, EXIT
+        dd LIT, curIn, EXIT
 
 ; -------------------------------------------------------------------------------------
 DefWord ":",1,0,xtDEFINE
@@ -919,7 +1035,7 @@ lSP      dd lStack              ; The loop stack-pointer
 regs     dd  100 dup (0)        ; My pseudo-registers
 rbase    dd    0
 
-toIn     dd    0                ; >IN - current char ptr
+curIn    dd    0                ; curIn - pointer to current char in TIB
 tib      db  128 dup (0)        ; The Text Input Buffer
 curWord  db   32 dup (0)        ; The current word
 buf4     db    4 dup (0)        ; A buffer for EMIT (LINUX)
