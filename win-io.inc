@@ -25,12 +25,16 @@ macro ioKEYq
 
 macro TRC ch
 {
+    push eax
+    push ebx
     push ecx
     push edx
     push ch
     ioEMIT
     pop edx
     pop ecx
+    pop ebx
+    pop eax
 }
 
 macro ioACCEPT
