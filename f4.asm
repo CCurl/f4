@@ -240,6 +240,19 @@ eqiYes: mov eax, 1              ; Strings are equal
         ret
 
 ; -------------------------------------------------------------------------------------
+; StrEqI ( cstr cstr2 -- f ) - Case Insensitive compare
+;       f == 0, NOT equals, f != 0, equals
+DefWord "StrEqI",6,0,STREQI
+        pop ecx
+        mov edx, BYTE [ecx]
+        inc edx
+        pop eax
+        mov ebx, BYTE [eax]
+        inc eax
+        call strEqI
+        push eax
+
+; -------------------------------------------------------------------------------------
 ; doFind: Version of FIND that can be called from assembly
 ;       Params: word/len ECX/EDX
 ;       Return: If found, EAX=[entry], ECX=Flags, EDX=XT
@@ -902,6 +915,18 @@ evLOOP: mov bl, 32
         call evErr              ; Error evaluation
         mov esi, coldStart
 evX:    NEXT
+
+; -------------------------------------------------------------------------------------
+DefWord "XXX",3,0,XXX
+        dd LIT, tib, LIT, curIn, fSTORE
+xxLP:   dd WORD, DUP1, zBRANCH, xxEOL
+        dd LIT, 0, OVER, COUNT, toNum
+        dd nzBRANCH, xxWD, DROP, NIP
+        dd STATE, FETCH, zBRANCH, xxLP
+        dd LIT, LIT, COMMA, COMMA
+        dd BRANCH, xxLP
+xxWD:   dd QUIT
+xxEOL:  dd DROP, DROP, EXIT
 
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
