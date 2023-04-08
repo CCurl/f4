@@ -39,9 +39,12 @@ macro TRC ch
 macro ioACCEPT {
     pop edx         ; sz
     pop ecx         ; buffer
-    mov	eax,3		; system call number (sys_read)
-    mov	ebx,0		; file descriptor (stdin)
-    int	0x80		; call kernel
+    push ecx
+    mov	eax, 3      ; system call number (sys_read)
+    mov	ebx, 0      ; file descriptor (stdin)
+    int	0x80        ; call kernel
+    pop ecx
+    mov [ecx+eax-1], BYTE 0
     push eax        ; number of bytes read
 }
 
