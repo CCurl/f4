@@ -187,6 +187,13 @@ toLower: ; Make DL lower-case if between A-Z
 tlX:    ret
 
 ; -------------------------------------------------------------------------------------
+DefCode "LOWER",5,0,LCASE
+        pop edx
+        call toLower
+        push edx
+        NEXT
+
+; -------------------------------------------------------------------------------------
 ; strEqI: Case-insensitive string-equals.
 ;         Params: string 1: EAX/EBX (string/len)
 ;                 string 2: ECX/EDX (string/len)
@@ -281,11 +288,12 @@ DefCode "EXECUTE",7,0,EXECUTE           ; ( xt-- )
         jmp DWORD [eax]
 
 ; -------------------------------------------------------------------------------------
-; doCStr: Parse the next word by delim in  into curWord as a counted string.
-;       Params: BL  => Delimiter (0 means whitespace)
+; nxtWd: Get the next word from the input stream into curWord.
+;       Params: BL  => Delimiter (32 means whitespace)
 ;       Return: ECX => length of word
 ;       NOTE: ECX=0 means end of line
-doCStr: mov edi, curWord
+;             curWord is a counted string
+nxtWd:  mov edi, curWord
         mov edx, [curIn]
         xor ecx, ecx            ; length is 0
         xor eax, eax
@@ -319,7 +327,7 @@ csX:    mov [curWord], cl
 ; -------------------------------------------------------------------------------------
 DefCode "WORD",5,0,xtWORD     ; ( --cStr )
         mov bl, 32
-        call doCStr
+        call nxtWd
         push DWORD curWord
         NEXT
 
@@ -593,7 +601,7 @@ crt03:  pop eax                         ; resolve XT fwd ref
 ; -------------------------------------------------------------------------------------
 DefCode "CREATE",6,0,CREATE
         mov bl, 32
-        call doCStr
+        call nxtWd
         call doCreate
         NEXT
 
