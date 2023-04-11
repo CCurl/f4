@@ -14,25 +14,11 @@ macro ioEMIT {
 
 ; ( addr len-- )
 macro ioTYPE {
-    pop edx         ; length
-    pop ecx         ; message to write
+    ;pop edx         ; length
+    ;pop ecx         ; message to write
     mov	eax,4		; system call number (sys_write)
     mov	ebx,1		; file descriptor (stdout)
     int	0x80		; call kernel
-}
-
-macro TRC ch
-{
-    push eax
-    push ebx
-    push ecx
-    push edx
-    push ch
-    ioEMIT
-    pop edx
-    pop ecx
-    pop ebx
-    pop eax
 }
 
 ; ( addr sz--num )
@@ -62,3 +48,30 @@ macro ioKEYq {
 macro ioTIMER {
     push 0
 }
+
+; -------------------------------------------------------------------------------------
+; ioOpenFile: Open a file
+;   Params:  EBX: FileName, ECX: Flags, EDX: Mode
+;   Returns: EAX: FileHandle
+ioOpenFile:
+    mov	eax,5		; system call number (sys_open)
+    int	0x80		; call kernel
+    ret
+
+; -------------------------------------------------------------------------------------
+; ioOpenFile: Close a file
+;   Params:  EBX: FileHandle
+;   Returns: None
+ioCloseFile:
+    mov	eax,6		; system call number (sys_close)
+    int	0x80		; call kernel
+    ret
+
+; -------------------------------------------------------------------------------------
+; ioWriteFile: Write to a file
+;   Params:  EBX: FileHandle, ECX: buffer, EDX: length
+;   Returns: None
+ioWriteFile:
+    mov	eax,4		; system call number (sys_write)
+    int	0x80		; call kernel
+    ret

@@ -88,6 +88,12 @@ macro DefCode Name, Length, Flags, Tag
         c_#Tag:
 }
 
+macro TRC ch
+{
+        rPUSH ch
+        call doTRC
+}
+
 ; ------------------------------------------------------------------------------
 LastTag equ 0
 
@@ -96,14 +102,14 @@ IMMEDIATE equ 1
 INLINE    equ 2
 
 ; -------------------------------------------------------------------------------------
-match =WINDOWS, FOR_OS { include 'win-io.inc' }
-match =LINUX,   FOR_OS { include 'lin-io.inc' }
-
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 match =WINDOWS, FOR_OS { section '.code' code readable executable }
 match =LINUX,   FOR_OS { segment readable executable }
+
+match =WINDOWS, FOR_OS { include 'win-io.inc' }
+match =LINUX,   FOR_OS { include 'lin-io.inc' }
 
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
@@ -121,6 +127,19 @@ entry $
 coldStart:
         dd QUIT
 
+; -------------------------------------------------------------------------------------
+doTRC:  push eax
+        push ebx
+        push ecx
+        push edx
+        rPOP eax
+        push eax
+        ioEMIT
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        ret
 ; -------------------------------------------------------------------------------------
 DOCOL:
         rPUSH esi           ; push current esi on to the return stack
@@ -308,9 +327,10 @@ csSKW:  mov al, [edx]           ; Get the current char
         inc edx
         jmp csSKW
 cs01:   mov al, [edx]           ; Get the current char
-        jz csX                  ; EOL?
-        cmp al, bl              ; Hit the delim?
-        je csX
+        cmp al, bl              ; Did we hit the delim?
+        je csM
+        test al, al             ; EOL?
+        jz csX
         cmp bl, 32              ; WS delimiter needs more checking
         jne csCW
         cmp al, 33
@@ -319,6 +339,7 @@ csCW:   stosb                   ; Collect the char into curWord
         inc ecx                 ; update length
         inc edx                 ; Next char
         jmp cs01
+csM:    inc edx                 ; Matched the delim
 csX:    mov [curWord], cl
         mov [curIn], edx
         mov [edi], BYTE 0       ; Add NULL terminator
@@ -555,8 +576,16 @@ DefCode "COUNT",5,0,COUNT       ; ( c-str--addr len )
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode "TYPE",4,0,TYPE         ; ( addr len-- )
+; doType: Params: ECX: string, EDX: length
+doType: 
         ioTYPE
+        ret
+        
+; -------------------------------------------------------------------------------------
+DefCode "TYPE",4,0,TYPE         ; ( addr len-- )
+        pop edx
+        pop ecx
+        call doType
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -630,16 +659,15 @@ DefCode "WORDS",5,0,WORDS
         mov eax, [v_LAST]       ; EAX: the current dict entry
 ww01:   test eax, eax           ; end of dictionary?
         jz nxt
-        push eax                ; Save the current word
-        add eax, CELL_SIZE*2+1  ; add length offset
-        movzx ebx, BYTE [eax]   ; length
-        inc eax                 ; string
-        push eax
-        push ebx
+        mov ecx, eax
+        add ecx, CELL_SIZE*2+1  ; add length offset
+        movzx edx, BYTE [ecx]   ; length
+        inc ecx                 ; string
+        push eax                ; Save our place
         ioTYPE
         push 9
         ioEMIT
-        pop ebx                 ; Get addr back
+        pop ebx                 ; Get place back (was EAX)
         mov eax, [ebx]          ; Move to the next word
         jmp ww01
 
@@ -804,6 +832,29 @@ evERR:  dd LIT, '-', EMIT, COUNT, TYPE
 evEOL:  dd EXIT
 
 ; -------------------------------------------------------------------------------------
+DefCode 'S"',2,IMMEDIATE,SQUOTE
+        mov bl, 34
+        call nxtWd
+        ; **TODO**
+        NEXT
+        
+; -------------------------------------------------------------------------------------
+DefCode '."',2,IMMEDIATE,DOTQ
+        mov bl, 34
+        call nxtWd
+        cmp [v_STATE], BYTE 1
+        je dqCmp
+        mov edx, ecx
+        mov ecx, curWord+1
+        call doType
+        NEXT
+dqCmp:  push curWord
+        ; **TODO**
+        NEXT
+        
+        NEXT
+        
+; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 DefWord "QUIT",4,0,QUIT
@@ -883,6 +934,24 @@ DefVar "BASE",4,0,BASE
 DefVar "USER",4,0,MEM
 
 ; -------------------------------------------------------------------------------------
+O_CREAT equ 0100o
+O_RDWR  equ 0002o
+S_RWALL equ 0666o
+DefCode "READ-BLOCK",10,0,READBLOCK
+        mov ebx, blockFn
+        mov ecx, O_CREAT+O_RDWR
+        mov edx, S_RWALL
+        call ioOpenFile
+        mov ebx, eax
+        push ebx
+        mov ecx, blockFn
+        mov edx, 8
+        call ioWriteFile
+        pop ebx
+        call ioCloseFile 
+        NEXT
+
+; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 match =WINDOWS, FOR_OS { section '.bdata' readable writable }
@@ -905,6 +974,8 @@ curIn    dd    0                ; curIn - pointer to current char in TIB
 tib      db  128 dup (0)        ; The Text Input Buffer
 curWord  db   32 dup (0)        ; The current word
 buf4     db    4 dup (0)        ; A buffer for EMIT (LINUX)
+blockFn  db 'blocks.f',0        ; Name of the block file
+blockFh  dd    0                ; Block file handle
 
 isNeg    db  0
 dotLen   db  0
