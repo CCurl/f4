@@ -45,20 +45,14 @@ macro ioACCEPT
 }
 
 winTYPE:
-        pop ecx
-        rPUSH ecx
-        pop ecx
-        pop edx
-type01: test ecx, ecx
+type01: test edx, edx
         jz typeX
-        movzx eax, BYTE [edx]
+        movzx eax, BYTE [ecx]
         TRC eax
-        inc edx
-        dec ecx
+        inc ecx
+        dec edx
         jmp type01
-typeX:  rPOP ecx
-        push ecx
-        ret
+typeX:  ret
 
 macro ioTYPE
 {
@@ -70,3 +64,7 @@ macro ioTIMER
     call [GetTickCount]
     push eax
 }
+
+ioOpenFile: ret
+ioCloseFile: ret
+ioWriteFile: ret
