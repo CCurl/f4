@@ -88,6 +88,12 @@ macro DefCode Name, Length, Flags, Tag
         c_#Tag:
 }
 
+macro TRC ch
+{
+        rPUSH ch
+        call doTRC
+}
+
 ; ------------------------------------------------------------------------------
 LastTag equ 0
 
@@ -96,14 +102,14 @@ IMMEDIATE equ 1
 INLINE    equ 2
 
 ; -------------------------------------------------------------------------------------
-match =WINDOWS, FOR_OS { include 'win-io.inc' }
-match =LINUX,   FOR_OS { include 'lin-io.inc' }
-
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 match =WINDOWS, FOR_OS { section '.code' code readable executable }
 match =LINUX,   FOR_OS { segment readable executable }
+
+match =WINDOWS, FOR_OS { include 'win-io.inc' }
+match =LINUX,   FOR_OS { include 'lin-io.inc' }
 
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
@@ -121,6 +127,19 @@ entry $
 coldStart:
         dd QUIT
 
+; -------------------------------------------------------------------------------------
+doTRC:  push eax
+        push ebx
+        push ecx
+        push edx
+        rPOP eax
+        push eax
+        ioEMIT
+        pop edx
+        pop ecx
+        pop ebx
+        pop eax
+        ret
 ; -------------------------------------------------------------------------------------
 DOCOL:
         rPUSH esi           ; push current esi on to the return stack
@@ -153,12 +172,19 @@ DefCode "SP0",3,0,SP0
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode ",",1,0,COMMA
-        pop eax
+; Comma: The standard FORTH ','
+;       Params: EAX => val
+Comma:  push edx
         mov edx, [v_HERE]
         mov [edx], eax
         add edx, CELL_SIZE
         mov [v_HERE], edx
+        pop edx
+        ret
+
+DefCode ",",1,0,COMMA
+        pop eax
+        call Comma
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -171,34 +197,6 @@ DefCode "C,",2,0,CCOMMA
         NEXT
 
 ; -------------------------------------------------------------------------------------
-; NUMBER? try to convert (str len) into a number.
-;         Stack effect: ( str len--num flg )
-DefCode "NUMBER?",7,0,NUMq
-        pop ecx                     ; len
-        pop edi                     ; str
-        push 0                      ; num
-        push 0                      ; flg
-        mov ebx, [v_BASE]
-nq01:   test ecx, ecx               ; ecx=0 => end of string
-        jz nqX
-        movzx  eax, BYTE [edi]      ; eax => char
-        call digitQ
-        test edx, edx               ; edx=0 => invalid char
-        jz nqNo
-        pop edx                     ; Discard flg
-        pop edx                     ; TOS => the current number
-        imul edx, ebx               ; TOS = (TOS * BASE) + DIGIT
-        add edx, eax
-        push edx                    ; New num
-        push 1                      ; New flg
-        inc edi
-        dec ecx
-        jmp nq01
-nqNo:   pop eax                     ; Discard flg
-        push 0                      ; flg=0
-nqX:    NEXT
-
-; -------------------------------------------------------------------------------------
 toLower: ; Make DL lower-case if between A-Z
         cmp dl, 'A'
         jl tlX
@@ -206,6 +204,13 @@ toLower: ; Make DL lower-case if between A-Z
         jg tlX
         add dl, 0x20
 tlX:    ret
+
+; -------------------------------------------------------------------------------------
+DefCode "LOWER",5,0,LCASE
+        pop edx
+        call toLower
+        push edx
+        NEXT
 
 ; -------------------------------------------------------------------------------------
 ; strEqI: Case-insensitive string-equals.
@@ -233,39 +238,67 @@ eqiYes: mov eax, 1              ; Strings are equal
         ret
 
 ; -------------------------------------------------------------------------------------
-; FIND: Look for a word in the dictionary.
-;       Stack: if found,     ( str len--xt flags 1 )
-;              if not found, ( str len--str len 0 )
-DefCode "FIND",4,0,FIND
-        pop edx                 ; string
-        pop ecx                 ; length
+; StrEqI ( c-str c-str2 -- f ) - Case Insensitive compare
+;       f == 0, NOT equals, f != 0, equals
+DefCode "StrEqI",6,0,STREQI
+        pop eax
+        pop ecx
+        movzx ebx, BYTE [eax]
+        movzx edx, BYTE [ecx]
+        inc eax
+        inc ecx
+        call strEqI
+        push eax
+        NEXT
+
+; -------------------------------------------------------------------------------------
+; doFind: Version of FIND that can be called from assembly
+;       Params: ECX: counted string
+;       Return: If found, EAX=[entry]
+;               If not found, EAX=0
+;               NOTE: EBX is used/destroyed
+doFind: movzx edx, BYTE [ecx]   ; EDX: len
+        inc ecx                 ; ECX: string
         mov eax, [v_LAST]       ; EAX: the current dict entry
 fw01:   test eax, eax           ; end of dictionary?
-        jz fwNo
-        push edx                ; Save string
-        push ecx                ; Save length
+        jz fwX
+        push edx                ; Save length
+        push ecx                ; Save string
         push eax                ; Save the current word
         add eax, CELL_SIZE*2+1  ; add length offset
         movzx ebx, BYTE [eax]   ; length2
         inc eax                 ; string2
-        call strEqI
+        call strEqI             ; Return is in EAX
         pop ebx                 ; Get current dict entry (was EAX)
-        pop ecx                 ; Get length back
-        pop edx                 ; Get string back
-        test eax, eax           ; Not 0 means they are equal
-        jnz fwYes
+        pop ecx                 ; Get string back
+        pop edx                 ; Get length back
+        test eax, eax           ; EAX != 0 means they are equal
+        jnz fwY
         mov eax, [ebx]          ; Not equal, move to the next word
         jmp fw01
-fwNo:   push ecx                ; Not found, return (--name len 0)
-        push edx
-        push 0
+fwY :   mov eax, ebx
+fwX :   ret
+
+; -------------------------------------------------------------------------------------
+; FIND: Look for a word in the dictionary.
+;       Stack: if found,     ( c-addr -- xt 1 | xt -1 )
+;              if not found, ( c-addr -- c-addr 0 ) 
+DefCode "FIND",4,0,FIND
+        mov ecx, DWORD TOS      ; Input string, leave on stack
+        call doFind
+        test eax, eax
+        jnz fndY
+        push eax                ; 0 means not found
         NEXT
-fwYes:  add ebx, CELL_SIZE      ; Offset to XT
-        push DWORD [ebx]        ; XT
-        add ebx, CELL_SIZE      ; Offset to Flags
-        movzx eax, BYTE [ebx]   ; Flags
-        push eax
-        push 1                  ; FOUND!
+fndY:   pop ebx                 ; Discard input string
+        add eax, CELL_SIZE      ; XT
+        push DWORD [eax]
+        add eax, CELL_SIZE      ; 1 means IMMEDIATE, else -1
+        movzx ecx, BYTE [eax]
+        cmp ecx, IMMEDIATE
+        je fndX
+        dec ecx
+fndX:   push ecx
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -274,42 +307,49 @@ DefCode "EXECUTE",7,0,EXECUTE           ; ( xt-- )
         jmp DWORD [eax]
 
 ; -------------------------------------------------------------------------------------
-; doWORD: Parse the next word from >IN into curWord.
-;       Return: ECX: length
+; nxtWd: Get the next word from the input stream into curWord.
+;       Params: BL  => Delimiter (32 means whitespace)
+;       Return: ECX => length of word
 ;       NOTE: ECX=0 means end of line
-doWord: mov ebx, curWord
-        xor ecx, ecx            ; len
-        mov edx, [toIn]
+;             curWord is a counted string
+nxtWd:  mov edi, curWord
+        mov edx, [curIn]
+        xor ecx, ecx            ; length is 0
         xor eax, eax
-wd01:   mov al, [edx]           ; Skip any leading whitespace
+        stosb                   ; 1st byte => length 0
+        cmp bl, 32              ; Skip WS only if bl == 32
+        jne cs01
+csSKW:  mov al, [edx]           ; Get the current char
+        test al, al             ; EOL?
+        jz csX
         cmp al, 32
-        jg wd02
-        cmp al, 13
-        je wdX
-        cmp al, 10
-        je wdX
-        cmp al, 0
-        je wdX
+        jg cs01
         inc edx
-        jmp wd01
-wd02:   mov [ebx], al           ; Collect word
-        inc ebx
-        inc edx
-        inc ecx                 ; Increment len
-        mov al, [edx]           ; Next char
+        jmp csSKW
+cs01:   mov al, [edx]           ; Get the current char
+        cmp al, bl              ; Did we hit the delim?
+        je csM
+        test al, al             ; EOL?
+        jz csX
+        cmp bl, 32              ; WS delimiter needs more checking
+        jne csCW
         cmp al, 33
-        jl wdX
-        cmp ecx, 32
-        jl wd02
-wdX:    mov [toIn], edx
-        mov [ebx], BYTE 0       ; Add NULL terminator
+        jl csX
+csCW:   stosb                   ; Collect the char into curWord
+        inc ecx                 ; update length
+        inc edx                 ; Next char
+        jmp cs01
+csM:    inc edx                 ; Matched the delim
+csX:    mov [curWord], cl
+        mov [curIn], edx
+        mov [edi], BYTE 0       ; Add NULL terminator
         ret
 
 ; -------------------------------------------------------------------------------------
-DefCode "WORD",4,0,xtWORD       ; ( --addr len )
-        call doWord
+DefCode "WORD",5,0,xtWORD     ; ( --cStr )
+        mov bl, 32
+        call nxtWd
         push DWORD curWord
-        push ecx
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -373,10 +413,10 @@ DefCode "SWAP",4,0,SWAP
 
 ; -------------------------------------------------------------------------------------
 DefCode "OVER",4,0,OVER
-        pop eax
-        mov ebx, TOS
-        push eax
+        pop ebx
+        mov eax, TOS
         push ebx
+        push eax
         NEXT
 
 ; -------------------------------------------------------------------------------------
@@ -527,19 +567,38 @@ DefCode "EMIT",4,0,EMIT         ; ( ch-- )
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode "TYPE",4,0,TYPE         ; ( addr len-- )
-        ioTYPE
+DefCode "COUNT",5,0,COUNT       ; ( c-str--addr len )
+        pop edx
+        movzx ecx, BYTE [edx]
+        inc edx
+        push edx
+        push ecx
         NEXT
 
 ; -------------------------------------------------------------------------------------
-DefCode "TIMER",5,0,TIMER     ; ( --n )
+; doType: Params: ECX: string, EDX: length
+doType: 
+        ioTYPE
+        ret
+        
+; -------------------------------------------------------------------------------------
+DefCode "TYPE",4,0,TYPE         ; ( addr len-- )
+        pop edx
+        pop ecx
+        call doType
+        NEXT
+
+; -------------------------------------------------------------------------------------
+DefCode "TIMER",5,0,TIMER       ; ( --n )
         ioTIMER
 nxt:    NEXT
 
 ; -------------------------------------------------------------------------------------
-; doCreate: Params: EDX: word-name, ECX: length
+; doCreate: Params: none, uses curWord
 doCreate:
         mov edx, curWord
+        mov cl, [edx]
+        inc edx
         mov edi, [v_HERE]               ; Use EDI as HERE
         mov eax, [v_LAST]
         mov [edi], eax                  ; Link
@@ -551,13 +610,12 @@ doCreate:
         inc edi
         mov [edi], cl                   ; Length
         inc edi
-crt01:  test ecx, ecx                   ; word-name
+crt01:  test cl, cl                   ; word-name
         jz crt02
         mov al, [edx]
-        mov [edi], al
-        inc edi
+        stosb
         inc edx
-        dec ecx
+        dec cl
         jmp crt01
 crt02:  mov [edi], BYTE 0               ; null terminator
 crtA:   test edi, CELL_SIZE-1           ; align
@@ -571,28 +629,29 @@ crt03:  pop eax                         ; resolve XT fwd ref
 
 ; -------------------------------------------------------------------------------------
 DefCode "CREATE",6,0,CREATE
-        call doWord
+        mov bl, 32
+        call nxtWd
         call doCreate
         NEXT
 
 ; -------------------------------------------------------------------------------------
-; digitQ: Set EDX=1 if EAX is a digit in base EBX, else EDX=0.
-;           NOTE: EAX will be the converted digit if EDX=1.
-digitQ: cmp eax, '0'                    ; <'0' means no
+; digitQ: Set AH=0 if AL is a digit in base BL, else AH=1.
+;           NOTE: if AH=0, AL will be the converted digit.
+digitQ: cmp al, '0'                     ; <'0' means no
         jl dqNo
-        sub eax, '0'                    ; Convert to number
-        cmp eax, ebx                    ; 0 .. (base-1) => OK
+        sub al, '0'                     ; Convert to number
+        cmp al, bl                      ; 0 .. (base-1) => OK
         jl dqYes
-        cmp ebx, 10                     ; BASE>10 needs more checking
+        cmp bl, 10                      ; BASE>10 needs more checking
         jle dqNo
-        sub eax, 7                      ; Hex: 'A'-'0'-7 => 10
-        cmp eax, 9
+        sub al, 7                       ; Hex: 'A'-'0'-7 => 10
+        cmp al, 9
         jle dqNo
-        cmp eax, ebx
+        cmp al, bl
         jge dqNo
-dqYes:  mov edx, 1
+dqYes:  mov ah, 0
         ret
-dqNo:   mov edx, 0
+dqNo:   mov ah, 1
         ret
 
 ; -------------------------------------------------------------------------------------
@@ -600,15 +659,15 @@ DefCode "WORDS",5,0,WORDS
         mov eax, [v_LAST]       ; EAX: the current dict entry
 ww01:   test eax, eax           ; end of dictionary?
         jz nxt
-        push eax                ; Save the current word
-        add eax, CELL_SIZE*2+1  ; add length offset
-        movzx ebx, BYTE [eax]   ; length
-        inc eax                 ; string
-        push eax
-        push ebx
+        mov ecx, eax
+        add ecx, CELL_SIZE*2+1  ; add length offset
+        movzx edx, BYTE [ecx]   ; length
+        inc ecx                 ; string
+        push eax                ; Save our place
         ioTYPE
-        TRC 9
-        pop ebx                 ; Get addr back
+        push 9
+        ioEMIT
+        pop ebx                 ; Get place back (was EAX)
         mov eax, [ebx]          ; Move to the next word
         jmp ww01
 
@@ -722,11 +781,85 @@ DefCode "R>",2,0,RFrom
         NEXT
 
 ; -------------------------------------------------------------------------------------
+; toNum: Implementation for the Forth CORE word >NUMBER
+;       Params: EDX: num, EDI: string, ECX:-len 
+;       Return: EDX: num, EDI: string, ECX:-len (0 means all converted)
+toNum:  xor eax, eax
+        mov ebx, [v_BASE]
+tn01:   test ecx, ecx           ; End of string?
+        jz tnX
+        mov al, [edi]
+        call digitQ
+        test ah, ah             ; AH == 0 if it is a number
+        jnz tnX
+        imul edx, ebx
+        add edx, eax
+        inc edi
+        dec ecx
+        jmp tn01
+tnX :   ret
+
+; -------------------------------------------------------------------------------------
+; >Number: Standard Forth def - ( num addr len -- num2 addr2 len2 )
+DefCode ">NUMBER",7,0,TONUM
+        pop ecx         ; starting len
+        pop edi         ; starting addr
+        pop edx         ; starting num
+        call toNum
+        push edx        ; ending num
+        push edi        ; ending addr
+        push ecx        ; ending len
+        NEXT
+
+; -------------------------------------------------------------------------------------
+DefWord "EVAL",4,0,EVAL
+        dd OK, TIB, LIT, 128, ACCEPT, DECTOS, zBRANCH, evEOL
+        dd LIT, tib, LIT, curIn, fSTORE
+evLP:   dd xtWORD, CFETCH, zBRANCH, evEOL
+        dd LIT, 0, LIT, curWord, COUNT
+        dd TONUM, nzBRANCH, evWD, DROP
+        dd STATE, FETCH, zBRANCH, evLP
+        dd LIT, LIT, COMMA, COMMA
+        dd BRANCH, evLP
+evWD:   dd DROP2, LIT, curWord
+        dd FIND, qDUP, zBRANCH, evERR
+        dd DECTOS, zBRANCH, evEXEC
+        dd STATE, FETCH, zBRANCH, evEXEC
+        dd COMMA, BRANCH, evLP
+evEXEC: dd EXECUTE, BRANCH, evLP
+evERR:  dd LIT, '-', EMIT, COUNT, TYPE
+        dd LIT, '?', EMIT, QUIT
+evEOL:  dd EXIT
+
+; -------------------------------------------------------------------------------------
+DefCode 'S"',2,IMMEDIATE,SQUOTE
+        mov bl, 34
+        call nxtWd
+        ; **TODO**
+        NEXT
+        
+; -------------------------------------------------------------------------------------
+DefCode '."',2,IMMEDIATE,DOTQ
+        mov bl, 34
+        call nxtWd
+        cmp [v_STATE], BYTE 1
+        je dqCmp
+        mov edx, ecx
+        mov ecx, curWord+1
+        call doType
+        NEXT
+dqCmp:  push curWord
+        ; **TODO**
+        NEXT
+        
+        NEXT
+        
+; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 DefWord "QUIT",4,0,QUIT
         dd zRSP
-quitL:  dd INTERPRET, BRANCH, quitL
+qLOOP:  dd EVAL, BRANCH, qLOOP
 
 ; -------------------------------------------------------------------------------------
 DefWord "CR",2,0,CR
@@ -746,44 +879,12 @@ DefWord "OK",2,0,OK
         dd CR, EXIT
 
 ; -------------------------------------------------------------------------------------
-DefWord "INTERPRET",9,0,INTERPRET
-        dd OK
-        dd TIB, LIT, 128, ACCEPT, DROP
-        dd TIB, TOIN, fSTORE
-in01:   dd xtWORD                               ; ( --str len )
-        dd DUP1, zBRANCH, inX                   ; dup 0= if drop2 exit then
-        dd OVER, OVER, NUMq                     ; ( str len--str len num flg )
-        dd zBRANCH, in02                        ; ( str len num f--str len num )
-        dd NIP, NIP                             ; ( str len num--num )
-        dd STATE, FETCH, LIT, 1, EQUALS         ; if state=1, compile LIT, <num>
-        dd zBRANCH, in01
-        dd LIT, LIT, COMMA, COMMA               ; Compile LIT <num>
-        dd BRANCH, in01
-in02:   ; Not a number, in dictionary?          ; ( --str len num )
-        dd DROP                                 ; Discard garbage 'num'
-        dd FIND                                 ; ( str len--[str len 0] | [xt flags 1] )
-        dd zBRANCH, inERR                       ; ( a b f--a b )
-        dd LIT, IMMEDIATE, EQUALS               ; if immediate, execute it now
-        dd nzBRANCH, inCX                       ; ( xt f--xt )
-        dd STATE, FETCH, LIT, 1, EQUALS         ; STATE @ 1 = IF COMMA THEN
-        dd zBRANCH, inCX
-        dd COMMA                                ; ( xt -- ): compile
-        dd BRANCH, in01
-inCX:   dd EXECUTE                              ; ( xt-- ): execute
-        dd BRANCH, in01
-inERR:  ; Not a number or word - ERROR          ; ( --str len )
-        dd LIT, '[', EMIT, TYPE, LIT
-        dd ']', EMIT, LIT, '?', DUP1, EMIT, EMIT
-        dd QUIT
-inX:    dd DROP2, EXIT
-
-; -------------------------------------------------------------------------------------
 DefWord "TIB",3,0,TIB
         dd LIT, tib, EXIT
 
 ; -------------------------------------------------------------------------------------
 DefWord ">IN",3,0,TOIN
-        dd LIT, toIn, EXIT
+        dd LIT, curIn, EXIT
 
 ; -------------------------------------------------------------------------------------
 DefWord ":",1,0,xtDEFINE
@@ -833,6 +934,24 @@ DefVar "BASE",4,0,BASE
 DefVar "USER",4,0,MEM
 
 ; -------------------------------------------------------------------------------------
+O_CREAT equ 0100o
+O_RDWR  equ 0002o
+S_RWALL equ 0666o
+DefCode "READ-BLOCK",10,0,READBLOCK
+        mov ebx, blockFn
+        mov ecx, O_CREAT+O_RDWR
+        mov edx, S_RWALL
+        call ioOpenFile
+        mov ebx, eax
+        push ebx
+        mov ecx, blockFn
+        mov edx, 8
+        call ioWriteFile
+        pop ebx
+        call ioCloseFile 
+        NEXT
+
+; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 ; -------------------------------------------------------------------------------------
 match =WINDOWS, FOR_OS { section '.bdata' readable writable }
@@ -851,10 +970,12 @@ lSP      dd lStack              ; The loop stack-pointer
 regs     dd  100 dup (0)        ; My pseudo-registers
 rbase    dd    0
 
-toIn     dd    0                ; >IN - current char ptr
+curIn    dd    0                ; curIn - pointer to current char in TIB
 tib      db  128 dup (0)        ; The Text Input Buffer
 curWord  db   32 dup (0)        ; The current word
 buf4     db    4 dup (0)        ; A buffer for EMIT (LINUX)
+blockFn  db 'blocks.f',0        ; Name of the block file
+blockFh  dd    0                ; Block file handle
 
 isNeg    db  0
 dotLen   db  0
